@@ -62,16 +62,40 @@ defmodule SelfRehydratingCache do
       :not_registered}`
   """
   @spec get(any(), non_neg_integer(), Keyword.t()) :: result
-  def get(key, timeout \\ 30_000, opts \\ []) when is_integer(timeout) and timeout > 0 do
+  def get(key, timeout \\ 30_000, _opts \\ []) when is_integer(timeout) and timeout > 0 do
+    with {:ok, pid} <- get_key_process_pid(key) do
+      get_cached_value_task =
+        Task.async(fn ->
+          GenServer.call(pid, :get_value, :infinity)
+        end)
+
+      case Task.yield(get_cached_value_task, timeout) || Task.shutdown(get_cached_value_task) do
+        nil ->
+          {:error, :timeout}
+
+        reply ->
+          reply
+      end
+    end
+  end
+
+  defp get_key_process_pid(key) do
+    case Registry.lookup(SelfRehydratingCache.KeyProcessRegistry, key) do
+      [{pid, _}] ->
+        {:ok, pid}
+
+      _ ->
+        {:error, :not_registered}
+    end
   end
 
   defp validate_already_registered(key) do
-    case Registry.lookup(SelfRehydratingCache.KeyProcessRegistry, key) do
-      [] ->
-        :ok
+    case get_key_process_pid(key) do
+      {:ok, _pid} ->
+        {:error, :already_registered}
 
       _ ->
-        {:error, :already_registered}
+        :ok
     end
   end
 end

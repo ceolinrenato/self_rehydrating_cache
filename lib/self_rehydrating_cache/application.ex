@@ -11,7 +11,8 @@ defmodule SelfRehydratingCache.Application do
       # Starts a worker by calling: SelfRehydratingCache.Worker.start_link(arg)
       # {SelfRehydratingCache.Worker, arg}
       SelfRehydratingCache.KeysDynamicSupervisor,
-      {Registry, name: SelfRehydratingCache.KeyProcessRegistry, keys: :unique}
+      {Registry, name: SelfRehydratingCache.KeyProcessRegistry, keys: :unique},
+      {Task.Supervisor, name: SelfRehydratingCache.TaskSupervisor}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

@@ -10,6 +10,7 @@ defmodule SelfRehydratingCache.Key do
       :ttl_timer,
       :refresh_interval,
       :ttl,
+      :running_hydrating_task_ref,
       test_env?: false,
       hydrated?: false,
       waiting_callers: []
@@ -36,24 +37,69 @@ defmodule SelfRehydratingCache.Key do
   end
 
   @impl GenServer
-  def handle_info(:refresh, %State{hydrating_fun: hydrating_fun} = state) do
+  def handle_info(
+        :refresh,
+        %State{running_hydrating_task_ref: task_ref} = state
+      )
+      when is_reference(task_ref) do
+    {:noreply, schedule_refresh(state)}
+  end
+
+  @impl GenServer
+  def handle_info(
+        :refresh,
+        %State{hydrating_fun: hydrating_fun} = state
+      ) do
+    task = Task.Supervisor.async_nolink(SelfRehydratingCache.TaskSupervisor, hydrating_fun)
+
+    {:noreply, schedule_refresh(%{state | running_hydrating_task_ref: task.ref})}
+  end
+
+  @impl GenServer
+  def handle_info(:expire, %State{} = state),
+    do: {:noreply, schedule_refresh(%{state | value: nil, hydrated?: false})}
+
+  @impl GenServer
+  def handle_info({task_ref, result}, %State{running_hydrating_task_ref: task_ref} = state) do
+    Process.demonitor(task_ref, [:flush])
+
     new_state =
-      case hydrating_fun.() do
+      case result do
         {:ok, value} ->
-          %{state | value: value, hydrated?: true}
+          %{state | value: value, hydrated?: true, running_hydrating_task_ref: nil}
           |> schedule_refresh()
           |> schedule_expiration()
+          |> notify_waiting_callers()
 
         _ ->
-          schedule_refresh(state)
+          %{state | running_hydrating_task_ref: nil}
       end
 
     {:noreply, new_state}
   end
 
   @impl GenServer
-  def handle_info(:expire, %State{} = state),
-    do: {:noreply, schedule_refresh(%{state | value: nil, hydrated?: false})}
+  def handle_info(
+        {:DOWN, task_ref, :process, _pid, _reason},
+        %State{running_hydrating_task_ref: task_ref} = state
+      ),
+      do: {:noreply, %{state | running_hydrating_task_ref: nil}}
+
+  @impl GenServer
+  def handle_call(
+        :get_value,
+        caller,
+        %State{hydrated?: false, waiting_callers: waiting_callers} = state
+      ),
+      do: {:noreply, %{state | waiting_callers: [caller | waiting_callers]}}
+
+  @impl GenServer
+  def handle_call(
+        :get_value,
+        _caller,
+        %State{value: value} = state
+      ),
+      do: {:reply, value, state}
 
   @impl GenServer
   def terminate(_reason, %State{ttl_timer: ttl_timer, refresh_timer: refresh_timer}) do
@@ -81,4 +127,12 @@ defmodule SelfRehydratingCache.Key do
   end
 
   defp schedule_expiration(state), do: state
+
+  defp notify_waiting_callers(%State{waiting_callers: waiting_callers, value: value} = state) do
+    Enum.each(waiting_callers, fn caller ->
+      GenServer.reply(caller, value)
+    end)
+
+    %{state | waiting_callers: []}
+  end
 end
