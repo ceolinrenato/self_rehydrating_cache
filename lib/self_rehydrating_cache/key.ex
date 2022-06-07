@@ -30,7 +30,6 @@ defmodule SelfRehydratingCache.Key do
       State
       |> struct!(opts)
       |> schedule_refresh()
-      |> schedule_expiration()
 
     task = Task.Supervisor.async_nolink(SelfRehydratingCache.TaskSupervisor, state.hydrating_fun)
 
@@ -58,7 +57,7 @@ defmodule SelfRehydratingCache.Key do
 
   @impl GenServer
   def handle_info(:expire, %State{} = state),
-    do: {:noreply, schedule_refresh(%{state | value: nil, hydrated?: false})}
+    do: {:noreply, %{state | value: nil, hydrated?: false}}
 
   @impl GenServer
   def handle_info({task_ref, result}, %State{running_hydrating_task_ref: task_ref} = state) do
@@ -68,7 +67,6 @@ defmodule SelfRehydratingCache.Key do
       case result do
         {:ok, value} ->
           %{state | value: value, hydrated?: true, running_hydrating_task_ref: nil}
-          |> schedule_refresh()
           |> schedule_expiration()
           |> notify_waiting_callers()
 
