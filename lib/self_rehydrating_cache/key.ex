@@ -11,7 +11,6 @@ defmodule SelfRehydratingCache.Key do
       :refresh_interval,
       :ttl,
       :running_hydrating_task_ref,
-      test_env?: false,
       hydrated?: false,
       waiting_callers: []
     ]
@@ -33,7 +32,9 @@ defmodule SelfRehydratingCache.Key do
       |> schedule_refresh()
       |> schedule_expiration()
 
-    {:ok, state}
+    task = Task.Supervisor.async_nolink(SelfRehydratingCache.TaskSupervisor, state.hydrating_fun)
+
+    {:ok, %{state | running_hydrating_task_ref: task.ref}}
   end
 
   @impl GenServer
@@ -109,7 +110,7 @@ defmodule SelfRehydratingCache.Key do
     :ok
   end
 
-  defp schedule_refresh(%State{refresh_interval: refresh_interval, test_env?: false} = state),
+  defp schedule_refresh(%State{refresh_interval: refresh_interval} = state),
     do: %{
       state
       | refresh_timer: Process.send_after(self(), :refresh, refresh_interval)
@@ -117,7 +118,7 @@ defmodule SelfRehydratingCache.Key do
 
   defp schedule_refresh(state), do: state
 
-  defp schedule_expiration(%State{ttl: ttl, ttl_timer: ttl_timer, test_env?: false} = state) do
+  defp schedule_expiration(%State{ttl: ttl, ttl_timer: ttl_timer} = state) do
     if is_reference(ttl_timer), do: Process.cancel_timer(ttl_timer)
 
     %{
